@@ -2,6 +2,25 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+# --- FIX PRO RENDER (Drží port otevřený, aby služba nepadala na timeout) ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"General Sklad Bot is online 24/7!")
+    def log_message(self, format, *args):
+        pass
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_web_server, daemon=True).start()
+# -------------------------------------------------------------
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -10,8 +29,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 def create_sklad_embed(items_dict: dict, history_list: list):
     embed = discord.Embed(
-        title="📦 SPRÁVA SKLADU & ODPISY",
-        color=discord.Color.gold()
+        title="📦 HLAVNÍ SKLAD – EVIDENCE & ODPISY",
+        color=discord.Color.from_rgb(41, 128, 185) # Modrá barva pro hlavní sklad
     )
     
     if items_dict:
@@ -21,22 +40,22 @@ def create_sklad_embed(items_dict: dict, history_list: list):
     embed.add_field(name="📊 Aktuální stav skladu", value=items_text, inline=False)
     
     if history_list:
-        history_text = "\n".join(history_list[-5:])  # Zobrazí posledních 5 pohybů
+        history_text = "\n".join(history_list[-5:])
     else:
         history_text = "*Zatím žádné pohyby*"
     embed.add_field(name="📜 Poslední pohyby / odpisy", value=history_text, inline=False)
     
-    embed.set_footer(text="Skladový evidenční systém")
+    embed.set_footer(text="General Warehouse System")
     return embed
 
 class SkladModal(discord.ui.Modal):
     def __init__(self, action_type: str):
-        title_text = "Vložit / Vrátit na sklad" if action_type == "add" else "Vyzvednout / Odepsat"
+        title_text = "Vložit / Vrátit na sklad" if action_type == "add" else "Vyzvednout / Odepsat ze skladu"
         super().__init__(title=title_text)
-        self.action_type = action_type  # "add" nebo "remove"
+        self.action_type = action_type
         
         self.item_input = discord.ui.TextInput(
-            label="Název položky (např. Meth, Peníze)",
+            label="Název položky",
             style=discord.TextStyle.short,
             placeholder="Napiš název položky...",
             required=True,
@@ -45,14 +64,14 @@ class SkladModal(discord.ui.Modal):
         self.amount_input = discord.ui.TextInput(
             label="Množství (číslo)",
             style=discord.TextStyle.short,
-            placeholder="Např. 5 nebo 3316",
+            placeholder="Např. 5 nebo 100...",
             required=True,
             max_length=20
         )
         self.reason_input = discord.ui.TextInput(
             label="Důvod / Poznámka",
             style=discord.TextStyle.short,
-            placeholder="Např. Odpis, nákup...",
+            placeholder="Např. Odpis, nákup, výdej...",
             required=True,
             max_length=100
         )
@@ -113,7 +132,7 @@ class SkladModal(discord.ui.Modal):
             await interaction.response.edit_message(embed=new_embed, view=SkladView())
 
             alert_msg = await interaction.channel.send(
-                content=f"📦 **POHYB NA SKLADĚ**\nUživatel {interaction.user.mention} **{action_desc}**: `{sign_str} {item_name}` (Aktuálně na skladě: `{items_dict[item_name]}`)\n**Důvod:** *{reason}*\n*(Zpráva se za 5 minut sama smaže)*"
+                content=f"📦 **POHYB NA HLAVNÍM SKLADĚ**\nUživatel {interaction.user.mention} **{action_desc}**: `{sign_str} {item_name}` (Aktuálně na skladě: `{items_dict[item_name]}`)\n**Důvod:** *{reason}*\n*(Zpráva se za 5 minut sama smaže)*"
             )
             await asyncio.sleep(300)
             try:
@@ -123,31 +142,30 @@ class SkladModal(discord.ui.Modal):
 
         except Exception as e:
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"❌ Nastala chyba při zpracování: `{e}`", ephemeral=True)
+                await interaction.response.send_message(f"❌ Nastala chyba: `{e}`", ephemeral=True)
             else:
-                await interaction.followup.send(f"❌ Nastala chyba při zpracování: `{e}`", ephemeral=True)
+                await interaction.followup.send(f"❌ Nastala chyba: `{e}`", ephemeral=True)
 
 class SkladView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Vložit / Vrátit", style=discord.ButtonStyle.success, emoji="➕", custom_id="sklad_add_btn")
+    @discord.ui.button(label="Vložit / Vrátit", style=discord.ButtonStyle.success, emoji="➕", custom_id="general_sklad_add_btn")
     async def add_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(SkladModal(action_type="add"))
 
-    @discord.ui.button(label="Vyzvednout / Odepsat", style=discord.ButtonStyle.danger, emoji="➖", custom_id="sklad_remove_btn")
+    @discord.ui.button(label="Vyzvednout / Odepsat", style=discord.ButtonStyle.danger, emoji="➖", custom_id="general_sklad_remove_btn")
     async def remove_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(SkladModal(action_type="remove"))
 
 @bot.event
 async def on_ready():
     bot.add_view(SkladView())
-    print(f"Bot je online jako {bot.user}")
+    print(f"Hlavní Sklad Bot je online jako {bot.user}")
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def sklad(ctx):
-    # Bezpečné smazání zprávy (pokud selže, bot nepadne)
     try:
         await ctx.message.delete()
     except discord.HTTPException:
