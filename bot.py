@@ -63,7 +63,6 @@ class SkladModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            # Kontrola množství
             qty_val = self.amount_input.value.strip()
             qty = int(qty_val)
             if qty <= 0:
@@ -82,7 +81,6 @@ class SkladModal(discord.ui.Modal):
             items_dict = {}
             history_list = []
             
-            # Bezpečné načtení stavu z embedu
             for field in embed.fields:
                 if "Aktuální stav skladu" in field.name and field.value != "*Sklad je prázdný*":
                     for line in field.value.split("\n"):
@@ -97,7 +95,6 @@ class SkladModal(discord.ui.Modal):
                 elif "Poslední pohyby" in field.name and field.value != "*Zatím žádné pohyby*":
                     history_list = field.value.split("\n")
 
-            # Výpočet nového množství
             current_qty = items_dict.get(item_name, 0)
             
             if self.action_type == "add":
@@ -109,15 +106,12 @@ class SkladModal(discord.ui.Modal):
                 sign_str = f"-{qty}"
                 action_desc = "odebral / odepsal"
 
-            # Přidání záznamu do historie
             log_entry = f"• **{user_name}** {action_desc}: `{sign_str} {item_name}` (*{reason}*)"
             history_list.append(log_entry)
 
-            # Aktualizace panelu
             new_embed = create_sklad_embed(items_dict, history_list)
             await interaction.response.edit_message(embed=new_embed, view=SkladView())
 
-            # Veřejná zpráva s mazáním po 5 minutách
             alert_msg = await interaction.channel.send(
                 content=f"📦 **POHYB NA SKLADĚ**\nUživatel {interaction.user.mention} **{action_desc}**: `{sign_str} {item_name}` (Aktuálně na skladě: `{items_dict[item_name]}`)\n**Důvod:** *{reason}*\n*(Zpráva se za 5 minut sama smaže)*"
             )
@@ -128,7 +122,6 @@ class SkladModal(discord.ui.Modal):
                 pass
 
         except Exception as e:
-            # Pokud nastane jakákoliv neočekávaná chyba, pošle se tajná zpráva namísto pádu
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"❌ Nastala chyba při zpracování: `{e}`", ephemeral=True)
             else:
@@ -154,7 +147,12 @@ async def on_ready():
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def sklad(ctx):
-    await ctx.message.delete()
+    # Bezpečné smazání zprávy (pokud selže, bot nepadne)
+    try:
+        await ctx.message.delete()
+    except discord.HTTPException:
+        pass
+        
     embed = create_sklad_embed({}, [])
     await ctx.send(embed=embed, view=SkladView())
 
