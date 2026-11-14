@@ -15,7 +15,6 @@ def create_sklad_embed(items_dict: dict, history_list: list):
     )
     
     if items_dict:
-        # Seřadí položky a vypíše aktuální celkový stav
         items_text = "\n".join([f"**{item}:** `{qty}`" for item, qty in sorted(items_dict.items())])
     else:
         items_text = "*Sklad je prázdný*"
@@ -32,12 +31,12 @@ def create_sklad_embed(items_dict: dict, history_list: list):
 
 class SkladModal(discord.ui.Modal):
     def __init__(self, action_type: str):
-        title_text = "Vložit / Vrátit na sklad" if action_type == "add" else "Vyzvednout / Odepsat ze skladu"
+        title_text = "Vložit / Vrátit na sklad" if action_type == "add" else "Vyzvednout / Odepsat"
         super().__init__(title=title_text)
         self.action_type = action_type  # "add" nebo "remove"
         
         self.item_input = discord.ui.TextInput(
-            label="Název položky (např. Meth, Špinavé peníze)",
+            label="Název položky (např. Meth, Peníze)",
             style=discord.TextStyle.short,
             placeholder="Napiš název položky...",
             required=True,
@@ -53,7 +52,7 @@ class SkladModal(discord.ui.Modal):
         self.reason_input = discord.ui.TextInput(
             label="Důvod / Poznámka",
             style=discord.TextStyle.short,
-            placeholder="Např. Odpis, nákup, policejní zabavení...",
+            placeholder="Např. Odpis, nákup...",
             required=True,
             max_length=100
         )
@@ -64,66 +63,76 @@ class SkladModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            qty = int(self.amount_input.value.strip())
+            # Kontrola množství
+            qty_val = self.amount_input.value.strip()
+            qty = int(qty_val)
             if qty <= 0:
-                raise ValueError()
-        except ValueError:
-            await interaction.response.send_message("❌ Množství musí být kladné celé číslo!", ephemeral=True)
-            return
+                await interaction.response.send_message("❌ Množství musí být větší než 0!", ephemeral=True)
+                return
 
-        item_name = self.item_input.value.strip()
-        reason = self.reason_input.value.strip()
-        user_name = interaction.user.display_name
+            item_name = self.item_input.value.strip()
+            reason = self.reason_input.value.strip()
+            user_name = interaction.user.display_name
 
-        embed = interaction.message.embeds[0]
-        items_dict = {}
-        history_list = []
-        
-        # Načtení aktuálního stavu z embedu
-        for field in embed.fields:
-            if field.name == "📊 Aktuální stav skladu" and field.value != "*Sklad je prázdný*":
-                lines = field.value.split("\n")
-                for line in lines:
-                    if "**" in line and ":" in line:
-                        parts = line.split(":")
-                        name = parts[0].replace("*", "").strip()
-                        try:
-                            q = int(parts[1].replace("`", "").strip())
-                            items_dict[name] = q
-                        except ValueError:
-                            pass
-            elif field.name == "📜 Poslední pohyby / odpisy" and field.value != "*Zatím žádné pohyby*":
-                history_list = field.value.split("\n")
+            if not interaction.message or not interaction.message.embeds:
+                await interaction.response.send_message("❌ Nelze načíst zprávu skladu. Napiš prosím nový příkaz `!sklad`.", ephemeral=True)
+                return
 
-        # Výpočet a započítání nového množství
-        current_qty = items_dict.get(item_name, 0)
-        
-        if self.action_type == "add":
-            items_dict[item_name] = current_qty + qty
-            sign_str = f"+{qty}"
-            action_desc = "přidal / vrátil"
-        else:
-            items_dict[item_name] = current_qty - qty
-            sign_str = f"-{qty}"
-            action_desc = "odebral / odepsal"
+            embed = interaction.message.embeds[0]
+            items_dict = {}
+            history_list = []
+            
+            # Bezpečné načtení stavu z embedu
+            for field in embed.fields:
+                if "Aktuální stav skladu" in field.name and field.value != "*Sklad je prázdný*":
+                    for line in field.value.split("\n"):
+                        if "**" in line and ":" in line:
+                            parts = line.split(":", 1)
+                            name = parts[0].replace("*", "").strip()
+                            try:
+                                q = int(parts[1].replace("`", "").strip())
+                                items_dict[name] = q
+                            except ValueError:
+                                pass
+                elif "Poslední pohyby" in field.name and field.value != "*Zatím žádné pohyby*":
+                    history_list = field.value.split("\n")
 
-        # Přidání záznamu do historie
-        log_entry = f"• **{user_name}** {action_desc}: `{sign_str} {item_name}` (*{reason}*)"
-        history_list.append(log_entry)
+            # Výpočet nového množství
+            current_qty = items_dict.get(item_name, 0)
+            
+            if self.action_type == "add":
+                items_dict[item_name] = current_qty + qty
+                sign_str = f"+{qty}"
+                action_desc = "přidal / vrátil"
+            else:
+                items_dict[item_name] = current_qty - qty
+                sign_str = f"-{qty}"
+                action_desc = "odebral / odepsal"
 
-        # Aktualizace hlavního panelu skladu
-        new_embed = create_sklad_embed(items_dict, history_list)
-        await interaction.response.edit_message(embed=new_embed, view=SkladView())
+            # Přidání záznamu do historie
+            log_entry = f"• **{user_name}** {action_desc}: `{sign_str} {item_name}` (*{reason}*)"
+            history_list.append(log_entry)
 
-        # Veřejná zpráva s upozorněním, která se za 5 minut sama smaže
-        alert_msg = await interaction.channel.send(
-            content=f"📦 **POHYB NA SKLADĚ**\nUživatel {interaction.user.mention} **{action_desc}**: `{sign_str} {item_name}` (Aktuálně na skladě: `{items_dict[item_name]}`)\n**Důvod:** *{reason}*\n*(Zpráva se za 5 minut sama smaže)*"
-        )
-        await asyncio.sleep(300)
-        try:
-            await alert_msg.delete()
-        except discord.HTTPException:
-            pass
+            # Aktualizace panelu
+            new_embed = create_sklad_embed(items_dict, history_list)
+            await interaction.response.edit_message(embed=new_embed, view=SkladView())
+
+            # Veřejná zpráva s mazáním po 5 minutách
+            alert_msg = await interaction.channel.send(
+                content=f"📦 **POHYB NA SKLADĚ**\nUživatel {interaction.user.mention} **{action_desc}**: `{sign_str} {item_name}` (Aktuálně na skladě: `{items_dict[item_name]}`)\n**Důvod:** *{reason}*\n*(Zpráva se za 5 minut sama smaže)*"
+            )
+            await asyncio.sleep(300)
+            try:
+                await alert_msg.delete()
+            except discord.HTTPException:
+                pass
+
+        except Exception as e:
+            # Pokud nastane jakákoliv neočekávaná chyba, pošle se tajná zpráva namísto pádu
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"❌ Nastala chyba při zpracování: `{e}`", ephemeral=True)
+            else:
+                await interaction.followup.send(f"❌ Nastala chyba při zpracování: `{e}`", ephemeral=True)
 
 class SkladView(discord.ui.View):
     def __init__(self):
@@ -146,7 +155,6 @@ async def on_ready():
 @commands.has_permissions(administrator=True)
 async def sklad(ctx):
     await ctx.message.delete()
-    # Sklad začíná zcela prázdný, položky si uživatelé sami vytvoří prvním vložením
     embed = create_sklad_embed({}, [])
     await ctx.send(embed=embed, view=SkladView())
 
